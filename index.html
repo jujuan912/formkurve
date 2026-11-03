@@ -214,7 +214,7 @@ function defaults(){
     profile:{set:false,sex:'m',age:25,height:180,weight:78,pal:1.4,goal:'halten',rate:0.25,protPerKg:2.0,fatPct:27,
       kraftPerWeek:4,kraftMin:60,runKm:20,cardioMin:60,trainSrc:'plaene'},
     track:{kcal:true,p:true,c:true,f:true,fib:true,sug:false,salt:false,water:true},
-    settings:{rest:90,bodyVol:true,rpe:false,name:''},
+    settings:{rest:90,restOn:true,bodyVol:true,rpe:false,name:''},
     routines:[{id:'am',name:'Yoga / Haltung (früh)',emoji:'☀️',goal:5,color:ROUTINE_COLORS[0]},{id:'pm',name:'Dehnen (abends)',emoji:'🌙',goal:5,color:ROUTINE_COLORS[1]}],
     home:HOME_WIDGETS.map(([id])=>({id,on:id!=='rekorde'})),
     customEx:[],plans:[],workouts:[],habits:{},foods:[],recent:[],meals:[],diary:{},measures:[],photos:[],events:[],races:[],active:null,seeded:false};
@@ -820,7 +820,8 @@ function openSettings(){
      ${NUT.map(([k,l])=>`<div class="row between" style="padding:6px 0"><span>${l}</span>${swtch(S.track[k],`data-tr="${k}"`)}</div>`).join('')}
      <div class="row between" style="padding:6px 0"><span>Wasser</span>${swtch(S.track.water,'data-tr="water"')}</div></div>
    <div class="card"><h3>Training</h3>
-     <div class="field"><label>Pausen-Timer (Sekunden, 0 = aus)</label><input type="number" id="sRest" value="${st.rest}"></div>
+     <div class="row between" style="padding:6px 0"><span class="grow">Pausen-Timer nach jedem Satz</span>${swtch(st.restOn,'id="sRestOn"')}</div>
+     <div class="field"><label>Pausendauer (Sekunden)</label><input type="number" id="sRest" value="${st.rest}"></div>
      <div class="row between" style="padding:6px 0"><span class="grow">RPE pro Satz erfassen <span class="small mute">(Anstrengung 1–10)</span></span>${swtch(st.rpe,'id="sRpe"')}</div>
      <div class="row between" style="padding:6px 0"><span class="grow">Körpergewicht ins Volumen von Körpergewichts-Übungen einrechnen</span>${swtch(st.bodyVol,'id="sBodyVol"')}</div></div>
    <div class="card"><h3>Daten exportieren</h3>
@@ -835,6 +836,7 @@ function openSettings(){
   $$('[data-tr]',sb).forEach(b=>b.onclick=()=>{ const k=b.dataset.tr; S.track[k]=!S.track[k]; b.classList.toggle('on',S.track[k]); save(); render(); });
   $('#sBodyVol',sb).onclick=e=>{ st.bodyVol=!st.bodyVol; e.currentTarget.classList.toggle('on',st.bodyVol); save(); };
   $('#sRpe',sb).onclick=e=>{ st.rpe=!st.rpe; e.currentTarget.classList.toggle('on',st.rpe); save(); };
+  $('#sRestOn',sb).onclick=e=>{ st.restOn=!st.restOn; e.currentTarget.classList.toggle('on',st.restOn); save(); };
   $('#sRest',sb).onchange=e=>{ const v=num(e.target.value); if(v!=null){ st.rest=Math.max(0,Math.min(900,Math.round(v))); save(); } };
   $$('[data-exp]',sb).forEach(b=>b.onclick=()=>doExport(b.dataset.exp));
   $('#sImp',sb).onchange=e=>importBackup(e.target.files[0]);
@@ -1204,6 +1206,8 @@ function drawWorkout(){
    ${a.ex.map((e,ei)=>drawExBlock(a,e,ei)).join('')}
    <button class="btn block" id="wAddEx" style="margin-bottom:10px">${sm(I.plus)} Übung hinzufügen</button>
    <div class="field"><label>Workout-Name</label><input id="wName" value="${esc(a.name)}" style="background:var(--card)"></div>
+   <div class="card row between" style="padding:12px 14px"><span class="grow"><b>⏱ Pausen-Timer</b><div class="small mute">${S.settings.restOn?S.settings.rest+' s nach jedem abgehakten Satz':'aus'}</div></span>${swtch(S.settings.restOn,'id="wRestOn"')}</div>
+   <button class="btn pri block" id="wFin2" style="margin-bottom:10px;padding:14px">✓ Workout beenden</button>
    <button class="btn danger block" id="wDiscard">${a.editId?'Bearbeitung verwerfen':'Workout verwerfen'}</button>
    <div class="resttimer" id="restBox" style="display:none"><div class="grow"><div class="small mute">Pause ☕</div><div class="mid" id="restT">0:00</div><div class="bar" style="margin-top:4px"><i id="restBar"></i></div></div><button class="btn sm" data-rest="-15">−15</button><button class="btn sm" data-rest="15">+15</button><button class="btn sm pri" data-rest="0">Skip</button></div>`;
   sb.scrollTop=scroll;
@@ -1252,7 +1256,7 @@ function bindWorkout(sb,a){
     if(!s.done){
       const row=b.closest('tr'); $$('input',row).forEach(inp=>{ const k=inp.dataset.in.split(':')[2]; if(s[k]==null&&inp.placeholder&&!['mm:ss','–'].includes(inp.placeholder)&&k!=='rpe'){ s[k]=num(inp.placeholder); } });
       const cols=colsFor(t); if(!cols.some(c=>c[0]!=='rpe'&&s[c[0]]!=null)){ toast('Erst Werte eintragen'); return; }
-      s.done=true; if(S.settings.rest>0&&s.kind!=='w'&&!a.editId&&!a.past&&!['lauf','cardio'].includes(t)){ a.restDur=S.settings.rest; a.restEnd=Date.now()+S.settings.rest*1000; }
+      s.done=true; if(S.settings.restOn&&S.settings.rest>0&&s.kind!=='w'&&!a.editId&&!a.past&&!['lauf','cardio'].includes(t)){ a.restDur=S.settings.rest; a.restEnd=Date.now()+S.settings.rest*1000; }
     } else s.done=false;
     save(); drawWorkout(); });
   $$('[data-addset]',sb).forEach(b=>b.onclick=()=>{ const e=a.ex[+b.dataset.addset]; e.sets.push(newSet()); save(); drawWorkout(); });
@@ -1274,6 +1278,8 @@ function bindWorkout(sb,a){
   $('#wName',sb).oninput=e=>{a.name=e.target.value;save();};
   const wd=$('#wDur',sb); if(wd) wd.oninput=()=>{ a.dur=num(wd.value)||null; save(); };
   bindSwipe(sb,a);
+  $('#wFin2',sb).onclick=finishWorkout;
+  $('#wRestOn',sb).onclick=()=>{ S.settings.restOn=!S.settings.restOn; if(!S.settings.restOn) a.restEnd=null; save(); drawWorkout(); toast(S.settings.restOn?'Pausen-Timer an':'Pausen-Timer aus'); };
   $('#wDiscard',sb).onclick=async()=>{ if(await confirmBox(a.editId?'Änderungen verwerfen?':'Workout verwerfen? Alle Einträge gehen verloren.','Verwerfen',true)){ S.active=null; save(); closeAll(); render(); } };
   $$('[data-rest]',sb).forEach(b=>b.onclick=()=>{ const v=+b.dataset.rest; if(!v) a.restEnd=null; else if(a.restEnd){ a.restEnd+=v*1000; a.restDur=Math.max(a.restDur,(a.restEnd-Date.now())/1000); } save(); updTimers(); });
 }
