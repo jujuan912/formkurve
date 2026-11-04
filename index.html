@@ -1341,7 +1341,7 @@ function drawExBlock(a,e,ei){
   }
   const cols=colsFor(t); const prev=last?last.sets.filter(p=>p.kind!=='w'):[]; const showPrev=!['lauf','cardio'].includes(t);
   const lastLine=last?`<div class="lastline">🕑 Letztes Mal <b>${dLabel(last.date)}</b>: ${last.sets.filter(s=>s.kind!=='w').map(s=>setTxt(s,t).replace(/ · RPE.*/,'')).join(' · ')}</div>`:'';
-  const sg=a.editId||a.past?null:suggestFor(e.ex,e.target);
+  const sg=null; // Progressions-Vorschlag auf Wunsch ausgeblendet
   const sugg=sg?`<div class="sugg">💡 <span>${sg.txt}</span><button data-sugg="${ei}">Übernehmen</button></div>`:'';
   let n=0;
   return `<div class="wex" data-sort="${ei}">${head}${note}${lastLine}${sugg}
