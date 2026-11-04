@@ -1,5 +1,5 @@
 // Formkurve Service Worker – App offline nutzbar, Übungsbilder werden gespeichert
-const APP='formkurve-app-202611040947', IMG='formkurve-bilder';
+const APP='formkurve-app-202611041823', IMG='formkurve-bilder';
 const CORE=['./','index.html','manifest.json','icon-180.png','icon-192.png','icon-512.png','lib/qrcode.js','lib/zxing.min.js'];
 self.addEventListener('install',e=>{ e.waitUntil(caches.open(APP).then(c=>c.addAll(CORE)).then(()=>self.skipWaiting())); });
 self.addEventListener('activate',e=>{ e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k.startsWith('formkurve-app-')&&k!==APP).map(k=>caches.delete(k)))).then(()=>self.clients.claim())); });
