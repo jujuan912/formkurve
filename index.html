@@ -541,7 +541,10 @@ function bw(){ const m=latestMeasure('weight'); return m?m.weight:S.profile.weig
 function weightAt(date){ let best=null; for(const m of S.measures||[]) if(m.weight!=null&&m.date<=date&&(!best||m.date>best.date)) best=m; return best?best.weight:((S.profile&&S.profile.weight)||null); }
 /* Strecke eines Satzes in km (Intervalle werden in Metern erfasst) */
 function skm(s,t){ return t==='intervall'?(s.m!=null?s.m/1000:(s.km||0)):(s.km||0); }
-function setVol(set,t,wbw){
+/* Bauchübungen zählen nicht ins Volumen (Körpergewicht × Wdh wäre unrealistisch) */
+function noVol(ex){ const x=ex&&EX.get(ex); return !!(x&&x.p.includes('abdominals')); }
+function setVol(set,t,wbw,ex){
+  if(ex&&noVol(ex)) return 0;
   if(set.kind==='w') return 0;
   if(t==='kraft') return (set.w||0)*(set.r||0);
   if(t==='body') return S.settings.bodyVol ? (((wbw!=null?wbw:bw())||0)+(set.w||0))*(set.r||0) : (set.w||0)*(set.r||0);
@@ -549,7 +552,7 @@ function setVol(set,t,wbw){
   return 0;
 }
 function e1rm(w,r){ if(!w||!r) return 0; if(r===1) return w; return w*(1+Math.min(r,15)/30); }
-function wVolume(w){ let v=0; for(const e of w.ex){ const t=exType(e.ex); for(const s of e.sets) v+=setVol(s,t,w.bw); } return v; }
+function wVolume(w){ let v=0; for(const e of w.ex){ const t=exType(e.ex); for(const s of e.sets) v+=setVol(s,t,w.bw,e.ex); } return v; }
 function wSets(w){ let n=0; for(const e of w.ex) n+= exType(e.ex)==='hyrox'?1:e.sets.filter(s=>s.kind!=='w').length; return n; }
 function wRun(w){ let km=0,min=0,hm=0; for(const e of w.ex){ const t=exType(e.ex);
     if(t==='lauf'||t==='intervall') for(const s of e.sets){ km+=skm(s,t); min+=s.min||0; hm+=s.hm||0; }
@@ -605,7 +608,7 @@ function exStats(id,from){
       const runs=h.sets.filter(s=>isHyRun(s.seg)&&s.min); st.series.push({x:h.date,total:full?tot:null,run:runs.length?runs.reduce((q,s)=>q+s.min,0)/runs.length:null}); continue; }
     for(const s of h.sets){
       st.sets++;
-      const v=setVol(s,t,h.w.bw); sv+=v; st.vol+=v; st.reps+=s.r||0;
+      const v=setVol(s,t,h.w.bw,id); sv+=v; st.vol+=v; st.reps+=s.r||0;
       if((s.w||0)>st.maxW){st.maxW=s.w;st.maxWdate=h.date;}
       if((s.r||0)>st.maxR){st.maxR=s.r;st.maxRdate=h.date;}
       if(v>st.bestSetVol){st.bestSetVol=v;st.bestSetVolTxt=(s.w?fmt(s.w,1)+' kg × ':'')+(s.r||0);}
@@ -966,7 +969,7 @@ async function doExport(kind){
   if(kind==='sets'){
     const rows=[['Datum','Workout','Plan','Übung','Kategorie','Typ','Satz','Aufwärmsatz','kg','Wdh','RPE','Sekunden','km','Minuten','Höhenmeter','Puls','Meter','Hyrox-Abschnitt','Volumen (kg)','e1RM (kg)']];
     for(const w of sortedWorkouts().reverse()){ const pl=S.plans.find(p=>p.id===w.planId);
-      for(const e of w.ex){ const x=EX.get(e.ex)||{}; const t=exType(e.ex); e.sets.forEach((s,i)=>rows.push([w.date,w.name,pl?pl.name:'',exName(e.ex),x.cat||'',t,i+1,s.kind==='w'?'ja':'',s.w,s.r,s.rpe,s.sec,s.km,s.min!=null?r1(s.min*100)/100:null,s.hm,s.hr,s.m,s.seg!=null?HY_SEG[s.seg]:'',r1(setVol(s,t,w.bw)),s.w&&s.r?r1(e1rm(s.w,s.r)):null])); } }
+      for(const e of w.ex){ const x=EX.get(e.ex)||{}; const t=exType(e.ex); e.sets.forEach((s,i)=>rows.push([w.date,w.name,pl?pl.name:'',exName(e.ex),x.cat||'',t,i+1,s.kind==='w'?'ja':'',s.w,s.r,s.rpe,s.sec,s.km,s.min!=null?r1(s.min*100)/100:null,s.hm,s.hr,s.m,s.seg!=null?HY_SEG[s.seg]:'',r1(setVol(s,t,w.bw,e.ex)),s.w&&s.r?r1(e1rm(s.w,s.r)):null])); } }
     download(`formkurve-saetze-${d}.csv`,csv(rows),'text/csv'); return;
   }
   if(kind==='ws'){
@@ -1464,7 +1467,7 @@ function bindSwipe(sb,a){
 }
 
 /* ---------- Live-Werte im Workout ---------- */
-function liveVol(a){ return a.ex.reduce((acc,e)=>{ const t=exType(e.ex); return acc+e.sets.filter(s=>s.done).reduce((x,s)=>x+setVol(s,t,a.bw),0); },0); }
+function liveVol(a){ return a.ex.reduce((acc,e)=>{ const t=exType(e.ex); return acc+e.sets.filter(s=>s.done).reduce((x,s)=>x+setVol(s,t,a.bw,e.ex),0); },0); }
 function refreshLive(a,inp){
   const v=$('#wVol'); if(v) v.textContent=fmtK(Math.round(liveVol(a)));
   const tr=inp.closest('tr'); if(tr){ tr.classList.remove('flash'); void tr.offsetWidth; tr.classList.add('flash'); }
@@ -1477,8 +1480,8 @@ function workoutInfo(w,live){
   let vol=0,n=0,reps=0;
   const rows=w.ex.map(e=>{ const x=EX.get(e.ex)||{p:[],s:[],name:'?'}; const t=exType(e.ex); const ss=sets(e); if(!ss.length) return null;
     const c=t==='hyrox'||t==='intervall'?2:ss.length; x.p.forEach(k=>m[k]+=c); x.s.forEach(k=>m[k]+=c*.5);
-    const v=ss.reduce((q,s)=>q+setVol(s,t,w.bw),0); vol+=v; n+=ss.length; reps+=ss.reduce((q,s)=>q+(s.r||0),0);
-    let best=''; if(['kraft','body','carry'].includes(t)){ const b=ss.reduce((q,s)=>setVol(s,t,w.bw)>setVol(q,t,w.bw)?s:q,ss[0]); best=setTxt(b,t); } else if(t!=='hyrox') best=setTxt(ss[0],t);
+    const v=ss.reduce((q,s)=>q+setVol(s,t,w.bw,e.ex),0); vol+=v; n+=ss.length; reps+=ss.reduce((q,s)=>q+(s.r||0),0);
+    let best=''; if(['kraft','body','carry'].includes(t)){ const b=ss.reduce((q,s)=>setVol(s,t,w.bw,e.ex)>setVol(q,t,w.bw,e.ex)?s:q,ss[0]); best=setTxt(b,t); } else if(t!=='hyrox') best=setTxt(ss[0],t);
     return {name:x.name,n:ss.length,v,best,t}; }).filter(Boolean);
   const max=Math.max(1,...Object.values(m)); const total=Object.values(m).reduce((q,v)=>q+v,0);
   const top=Object.entries(m).filter(x=>x[1]>0).sort((a,b)=>b[1]-a[1]);
