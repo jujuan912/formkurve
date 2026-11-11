@@ -2395,6 +2395,20 @@ async function syncNow(opt={}){
           else if(dirty&&!SY.sha){ applyData(mergeData(snapshot().data,remote.doc.data,null)); }
           else { applyData(remote.doc.data); rememberBase(remote.sha); if(!opt.quiet) render(); break; }
         } else if(!dirty&&remote){ SY.lastSync=Date.now(); sySave(); break; }
+        // Schutz: fehlen auf diesem Gerät viele Daten (z. B. Browserdaten gelöscht), nicht blind hochladen
+        if(remote){
+          const cnt=d=>{ let n=0; for(const c of COLLS) n+=(d[c]||[]).length; for(const mp of MAPS) n+=Object.keys(d[mp]||{}).length; return n; };
+          const nL=cnt(snapshot().data), nR=cnt(remote.doc.data);
+          if(nR>=5 && nL<nR*0.6){
+            setSy('err','Auf diesem Gerät fehlen Daten – bitte bestätigen');
+            if(await confirmBox(`Achtung: Auf diesem Gerät sind nur ${nL} Einträge, in deiner Sicherung aber ${nR}. Wahrscheinlich wurden hier die Browserdaten gelöscht. Soll der vollständige Stand von GitHub geholt werden?`,'Von GitHub holen (empfohlen)')){
+              applyData(remote.doc.data); rememberBase(remote.sha); render(); break;
+            }
+            if(!await confirmBox(`Wirklich den kleineren Stand (${nL} Einträge) hochladen? Die ${nR} Einträge in der Sicherung werden dann überschrieben – über den Verlauf auf GitHub bleiben sie wiederherstellbar.`,'Trotzdem hochladen',true)){
+              setSy('err','Sicherung angehalten – Daten nicht hochgeladen'); return false;
+            }
+          }
+        }
         // hochladen
         const body={message:`Formkurve-Sync ${new Date().toLocaleString('de-DE')} (${snapshot().device})`,content:b64enc(JSON.stringify(snapshot()))};
         if(remote) body.sha=remote.sha;
