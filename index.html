@@ -169,6 +169,14 @@ table.sets tr.done input{background:var(--card)}
 .exHero{border-radius:20px;height:150px;display:grid;place-items:center;font-size:72px;margin-bottom:12px;color:#fff}
 .chart{width:100%;display:block}
 .chart text{fill:var(--mute);font-size:10px}
+.chart [data-tip]{cursor:pointer}
+.chart .cbar{transition:opacity .15s}
+.chart.hasSel .cbar:not(.sel){opacity:.35}
+.chart circle.sel{stroke-width:3.5}
+.ctip{position:fixed;z-index:95;background:var(--text);color:var(--bg);padding:7px 11px;border-radius:11px;font-size:13px;font-weight:750;pointer-events:none;white-space:nowrap;box-shadow:0 6px 18px rgba(0,0,0,.18);transform:translate(-50%,-100%)}
+.livenote{display:flex;gap:8px;align-items:center;background:var(--accSoft);color:var(--accDeep);border-radius:14px;padding:9px 12px;font-size:13px;font-weight:650;margin-bottom:12px}
+.livedot{width:9px;height:9px;border-radius:50%;background:#ef4444;flex:none;animation:livepulse 1.4s infinite}
+@keyframes livepulse{50%{opacity:.35}}
 .mus-wrap{display:flex;gap:6px;justify-content:center}
 .mus-wrap svg{width:48%;max-width:210px}
 .legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--mute)}
@@ -375,6 +383,7 @@ const sm = (ic,s=16)=>ic.replace('<svg',`<svg width="${s}" height="${s}"`);
 /* ---------- Sheets (Modals) ---------- */
 const sheets = [];
 function openSheet(title, html, opt={}){
+  hideChartTip();
   const sc=document.createElement('div'); sc.className='scrim';
   sc.innerHTML=`<div class="sheet ${opt.full?'full':''}"><div class="grab"></div><div class="sh">${opt.left||''}<h2>${esc(title)}</h2>${opt.right||''}<button class="iconbtn" data-close>${I.x}</button></div><div class="sb"></div></div>`;
   const sb=$('.sb',sc); sb.innerHTML=html;
@@ -416,19 +425,47 @@ function confirmBox(msg,ok='OK',danger){
 
 /* ---------- Mini-Charts (SVG, offline) ---------- */
 function niceMax(v){ if(v<=0) return 1; const p=Math.pow(10,Math.floor(Math.log10(v))); const n=v/p; return (n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10)*p; }
+/* Runde Achsen-Schritte: Zahlen 1-2-2,5-5-10, Zeiten (Minuten/Sekunden) in Uhr-tauglichen Schritten */
+const STEP_MIN=[1/60,2/60,5/60,10/60,15/60,20/60,30/60,1,2,5,10,15,20,30,60,90,120,180,240,360,600];
+const STEP_SEC=[1,2,5,10,15,20,30,60,120,180,300,600,900,1200,1800,3600];
+function niceStep(raw,unit){
+  if(!(raw>0)) return 1;
+  const C=unit==='min'?STEP_MIN:unit==='sec'?STEP_SEC:null;
+  if(C){ for(const c of C) if(c>=raw-1e-9) return c; const L=C[C.length-1]; return L*Math.ceil(raw/L); }
+  const p=Math.pow(10,Math.floor(Math.log10(raw))), n=raw/p;
+  return (n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10)*p;
+}
+function niceScale(lo,hi,opt={}){
+  if(!isFinite(lo)||!isFinite(hi)){ lo=0; hi=1; }
+  if(hi<lo){ const t=lo; lo=hi; hi=t; }
+  if(hi===lo){ const d=Math.abs(hi)*0.1||1; lo-=d; hi+=d; if(opt.zero&&lo<0&&hi>0) lo=0; }
+  let step=niceStep((hi-lo)/(opt.ticks||4),opt.unit);
+  if(opt.int) step=Math.max(1,Math.round(step));
+  const a=Math.floor(lo/step+1e-9)*step, b=Math.ceil(hi/step-1e-9)*step;
+  const ticks=[]; for(let v=a; v<=b+step*1e-6; v+=step) ticks.push(Math.round(v*1e6)/1e6);
+  if(ticks.length<2) ticks.push(Math.round((a+step)*1e6)/1e6);
+  let dec=0; while(dec<3&&Math.abs(step*Math.pow(10,dec)-Math.round(step*Math.pow(10,dec)))>1e-6) dec++;
+  return {lo:ticks[0],hi:ticks[ticks.length-1],step,ticks,dec};
+}
+function axisLbl(v,sc,opt){ if(opt.yfmt) return opt.yfmt(v); return Math.abs(v)>=10000?fmtK(v):fmt(v,sc.dec); }
 function barChart(data,opt={}){
   const W=340,H=opt.h||150,pl=34,pb=18,pt=10,pr=4;
   if(!data.length) return '<div class="empty">Keine Daten</div>';
-  const maxV=niceMax(Math.max(opt.goal||0,...data.map(d=>Math.max(d.v||0,d.v2||0)))*1.05);
+  const vals=data.map(d=>Math.max(d.v||0,d.v2||0));
+  const allInt=vals.every(v=>Number.isInteger(v))&&(opt.goal==null||Number.isInteger(opt.goal));
+  const sc=niceScale(0,Math.max(opt.goal||0,...vals)||1,{unit:opt.unit,int:allInt&&!opt.unit,zero:true});
+  const maxV=sc.hi;
   const cw=(W-pl-pr)/data.length, bw=Math.max(2,Math.min(26,cw*0.68));
   const y=v=>pt+(H-pt-pb)*(1-v/maxV);
   let s=`<svg class="chart" viewBox="0 0 ${W} ${H}">`;
-  for(let i=0;i<=3;i++){ const v=maxV*i/3, yy=y(v); s+=`<line x1="${pl}" x2="${W-pr}" y1="${yy}" y2="${yy}" stroke="var(--grid)"/><text x="${pl-4}" y="${yy+3}" text-anchor="end">${opt.yfmt?opt.yfmt(v):fmtK(Math.round(v))}</text>`; }
+  for(const v of sc.ticks){ const yy=y(v); s+=`<line x1="${pl}" x2="${W-pr}" y1="${yy}" y2="${yy}" stroke="var(--grid)"/><text x="${pl-4}" y="${yy+3}" text-anchor="end">${axisLbl(v,sc,opt)}</text>`; }
   const step=Math.ceil(data.length/(opt.maxLabels||8));
   data.forEach((d,i)=>{
     const x=pl+cw*i+(cw-bw)/2;
     const h=(H-pt-pb)-(y(d.v||0)-pt);
-    s+=`<rect x="${x}" y="${y(d.v||0)}" width="${bw}" height="${Math.max(d.v?2:0,h)}" rx="4" fill="${d.c||opt.color||'var(--acc)'}"><title>${esc(d.l)}: ${opt.tip?opt.tip(d.v):fmt(d.v,1)}</title></rect>`;
+    const tip=`${d.l}: ${opt.tip?opt.tip(d.v||0):fmt(d.v||0,Number.isInteger(d.v||0)?0:1)}`;
+    s+=`<rect class="cbar" data-i="${i}" x="${x}" y="${y(d.v||0)}" width="${bw}" height="${Math.max(d.v?2:0,h)}" rx="4" fill="${d.c||opt.color||'var(--acc)'}"></rect>`;
+    s+=`<rect class="hit" data-i="${i}" data-tip="${esc(tip)}" x="${pl+cw*i}" y="${pt}" width="${cw}" height="${H-pt-pb}" fill="transparent"><title>${esc(tip)}</title></rect>`;
     if(i%step===0) s+=`<text x="${pl+cw*i+cw/2}" y="${H-4}" text-anchor="middle">${esc(d.l)}</text>`;
   });
   if(opt.goal){ const gy=y(opt.goal); s+=`<line x1="${pl}" x2="${W-pr}" y1="${gy}" y2="${gy}" stroke="var(--warn)" stroke-dasharray="4 3"/><text x="${W-pr}" y="${gy-3}" text-anchor="end" style="fill:var(--warn)">Ziel ${opt.goal}</text>`; }
@@ -440,19 +477,37 @@ function lineChart(pts,opt={}){
   const W=340,H=opt.h||160,pl=opt.pl||44,pb=18,pt=10,pr=8;
   const xs=pts.map(p=>pd(p.x).getTime()); let x0=Math.min(...xs),x1=Math.max(...xs); if(x0===x1){x0-=864e5*3;x1+=864e5*3;}
   let y0=Math.min(...pts.map(p=>p.y)),y1=Math.max(...pts.map(p=>p.y)); if(opt.goal!=null&&opt.showGoal){ y0=Math.min(y0,opt.goal); y1=Math.max(y1,opt.goal); }
-  const padY=(y1-y0)*0.12||Math.abs(y1)*0.05||1; y0-=padY; y1+=padY; if(opt.zero) y0=Math.min(0,y0);
+  const padY=(y1-y0)*0.06; y0-=padY; y1+=padY; if(opt.zero) y0=Math.min(0,y0);
+  const sc=niceScale(y0,y1,{unit:opt.unit}); y0=sc.lo; y1=sc.hi;
   const X=t=>pl+(W-pl-pr)*(t-x0)/(x1-x0), Y=v=>pt+(H-pt-pb)*(1-(v-y0)/(y1-y0));
   let s=`<svg class="chart" viewBox="0 0 ${W} ${H}">`;
-  for(let i=0;i<=3;i++){ const v=y0+(y1-y0)*i/3, yy=Y(v); s+=`<line x1="${pl}" x2="${W-pr}" y1="${yy}" y2="${yy}" stroke="var(--grid)"/><text x="${pl-4}" y="${yy+3}" text-anchor="end">${opt.yfmt?opt.yfmt(v):fmt(v,Math.abs(y1-y0)<10?1:0)}</text>`; }
+  for(const v of sc.ticks){ const yy=Y(v); s+=`<line x1="${pl}" x2="${W-pr}" y1="${yy}" y2="${yy}" stroke="var(--grid)"/><text x="${pl-4}" y="${yy+3}" text-anchor="end">${axisLbl(v,sc,opt)}</text>`; }
   for(let i=0;i<=3;i++){ const t=x0+(x1-x0)*i/3; const d=new Date(t); s+=`<text x="${X(t)}" y="${H-4}" text-anchor="${i===0?'start':i===3?'end':'middle'}">${d.getDate()}.${MON[d.getMonth()]}${(x1-x0)>3e10?' '+String(d.getFullYear()).slice(2):''}</text>`; }
   const path=pts.map((p,i)=>(i?'L':'M')+X(xs[i]).toFixed(1)+','+Y(p.y).toFixed(1)).join('');
   const c=opt.color||'var(--acc)';
   if(pts.length>1) s+=`<path d="${path} L${X(xs[xs.length-1]).toFixed(1)},${H-pb} L${X(xs[0]).toFixed(1)},${H-pb}Z" fill="${c}" opacity=".1"/><path d="${path}" fill="none" stroke="${c}" stroke-width="2.4" stroke-linejoin="round"/>`;
-  pts.forEach((p,i)=>{ s+=`<circle cx="${X(xs[i])}" cy="${Y(p.y)}" r="${pts.length>40?2:3.2}" fill="var(--card)" stroke="${c}" stroke-width="2"><title>${dLabel(p.x)}: ${opt.yfmt?opt.yfmt(p.y):fmt(p.y,1)}</title></circle>`; });
+  pts.forEach((p,i)=>{ const tip=`${dLabel(p.x)}${p.live?' (läuft)':''}: ${opt.tip?opt.tip(p.y):opt.yfmt?opt.yfmt(p.y):fmt(p.y,1)}`;
+    s+=`<circle class="pt" data-i="${i}" cx="${X(xs[i])}" cy="${Y(p.y)}" r="${pts.length>40?2:3.2}" fill="${p.live?c:'var(--card)'}" stroke="${c}" stroke-width="2"></circle><circle data-i="${i}" data-tip="${esc(tip)}" cx="${X(xs[i])}" cy="${Y(p.y)}" r="11" fill="transparent"><title>${esc(tip)}</title></circle>`; });
   if(opt.extra) s+=opt.extra(X,Y,H,pb);
   if(opt.goal!=null){ const gy=Y(opt.goal); if(gy>pt&&gy<H-pb) s+=`<line x1="${pl}" x2="${W-pr}" y1="${gy}" y2="${gy}" stroke="var(--warn)" stroke-dasharray="4 3"/>`; }
   return s+'</svg>';
 }
+let chartTip=null, chartTipT=null, chartTipAt=0;
+function hideChartTip(){ if(chartTip){ chartTip.remove(); chartTip=null; } clearTimeout(chartTipT); $$('.chart.hasSel').forEach(c=>{ c.classList.remove('hasSel'); $$('.sel',c).forEach(x=>x.classList.remove('sel')); }); }
+document.addEventListener('click',ev=>{
+  const t=ev.target.closest&&ev.target.closest('.chart [data-tip]');
+  const prevSel=t&&t.closest('.chart').querySelector('.sel[data-i="'+t.dataset.i+'"]');
+  hideChartTip(); if(!t||prevSel) return;
+  const svg=t.closest('.chart'); svg.classList.add('hasSel');
+  $$(`[data-i="${t.dataset.i}"]`,svg).forEach(x=>{ if(x.classList.contains('cbar')||x.classList.contains('pt')) x.classList.add('sel'); });
+  const r=t.getBoundingClientRect(); const mark=svg.querySelector('.sel');
+  const top=(mark&&mark.classList.contains('cbar')?mark.getBoundingClientRect().top:r.top+r.height/2)-8;
+  chartTipAt=Date.now(); chartTip=document.createElement('div'); chartTip.className='ctip'; chartTip.textContent=t.dataset.tip; document.body.appendChild(chartTip);
+  const w=chartTip.offsetWidth, cx=Math.min(innerWidth-w/2-8,Math.max(w/2+8,r.left+r.width/2));
+  chartTip.style.left=cx+'px'; chartTip.style.top=Math.max(chartTip.offsetHeight+8,top)+'px';
+  chartTipT=setTimeout(hideChartTip,3500);
+},true);
+addEventListener('scroll',()=>{ if(chartTip&&Date.now()-chartTipAt>500) hideChartTip(); },true);
 function ring(val,max,size=118,color='var(--acc)',inner=''){
   const r=size/2-9, c=2*Math.PI*r, p=Math.max(0,Math.min(1,max?val/max:0));
   const over=max&&val>max*1.05;
@@ -490,7 +545,7 @@ function applyTheme(){
 }
 try{ matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{ if(S&&S.settings.mode==='auto') applyTheme(); }); }catch(e){}
 function render(){
-  applyTheme();
+  hideChartTip(); applyTheme();
   renderTabs();
   const app=$('#app');
   const f={heute:renderHeute,training:renderTraining,ernaehrung:renderErn,statistik:renderStats,koerper:renderKoerper}[ui.tab];
@@ -560,7 +615,16 @@ function wRun(w){ let km=0,min=0,hm=0; for(const e of w.ex){ const t=exType(e.ex
   return {km,min,hm}; }
 function hyTotal(sets){ return sets.reduce((q,s)=>q+(s.min||0),0); }
 function hyComplete(sets){ for(let i=0;i<16;i++) if(!sets.some(s=>s.seg===i&&s.min)) return false; return true; }
-function wsIn(a,b){ return S.workouts.filter(w=>w.date>=a&&w.date<=b); }
+/* Laufendes Training (nur abgehakte Sätze) – fließt sofort in die Statistik ein */
+function liveWorkout(){
+  const a=S&&S.active; if(!a) return null;
+  const ex=a.ex.map(e=>({ex:e.ex,note:e.note||'',sets:e.sets.filter(s=>s.done).map(({done,...r})=>r)})).filter(e=>e.sets.length);
+  if(!ex.length) return null;
+  const dur=a.editId||a.past?(a.dur||60):Math.max(1,Math.round((Date.now()-a.start)/60000));
+  return {id:a.editId||a.id,date:a.date||today(),start:a.start,dur,planId:a.planId||null,name:a.name||'Workout',note:'',ex,bw:a.bw!=null?a.bw:(a.past?weightAt(a.date||today()):bw()),live:true};
+}
+function statWs(){ const L=liveWorkout(); return L?S.workouts.filter(w=>w.id!==L.id).concat(L):S.workouts; }
+function wsIn(a,b){ return statWs().filter(w=>w.date>=a&&w.date<=b); }
 function sortedWorkouts(){ return [...S.workouts].sort((a,b)=>(b.date+String(b.start||0).padStart(15,'0')).localeCompare(a.date+String(a.start||0).padStart(15,'0'))); }
 function lastSession(ex,excludeId){
   let best=null; for(const w of S.workouts){ if(w.id===excludeId) continue; for(const e of w.ex) if(e.ex===ex&&e.sets.length&&(!best||w.date>best.date||(w.date===best.date&&(w.start||0)>(best.start||0)))) best={date:w.date,start:w.start,sets:e.sets}; }
@@ -591,13 +655,13 @@ function suggestFor(ex,target){
 }
 
 /* ---- Übungs-Statistik ---- */
-function exHistory(id,from='0000',to='9999'){
+function exHistory(id,from='0000',to='9999',noLive){
   const out=[];
-  for(const w of S.workouts){ if(w.date<from||w.date>to) continue; for(const e of w.ex) if(e.ex===id){ const sets=e.sets.filter(s=>s.kind!=='w'); if(sets.length) out.push({w,date:w.date,sets}); } }
+  for(const w of (noLive?S.workouts:statWs())){ if(w.date<from||w.date>to) continue; for(const e of w.ex) if(e.ex===id){ const sets=e.sets.filter(s=>s.kind!=='w'); if(sets.length) out.push({w,date:w.date,sets}); } }
   return out.sort((a,b)=>a.date.localeCompare(b.date));
 }
-function exStats(id,from){
-  const t=exType(id), H=exHistory(id,from);
+function exStats(id,from,noLive){
+  const t=exType(id), H=exHistory(id,from,'9999',noLive);
   const st={t,sessions:H.length,sets:0,reps:0,vol:0,maxW:0,maxWdate:null,maxR:0,maxRdate:null,bestSetVol:0,bestSetVolTxt:'',bestSessVol:0,bestSessDate:null,e1:0,e1date:null,
     maxSec:0,totSec:0,km:0,min:0,hm:0,maxKm:0,maxKmDate:null,bestPace:0,bestPaceDate:null,maxHm:0,maxM:0,rpeN:0,rpeSum:0,last:H.length?H[H.length-1].date:null,first:H.length?H[0].date:null,series:[],
     hyBest:null,hyBestDate:null,hySeg:[]};
@@ -605,7 +669,7 @@ function exStats(id,from){
     let sv=0,sMaxW=0,sE1=0,sKm=0,sMin=0,sMaxR=0,sSec=0,sRpe=0,sRpeN=0;
     if(t==='hyrox'){ const full=hyComplete(h.sets); const tot=hyTotal(h.sets); if(full&&tot&&(!st.hyBest||tot<st.hyBest)){st.hyBest=tot;st.hyBestDate=h.date;}
       for(const s of h.sets) if(s.min&&(!st.hySeg[s.seg]||s.min<st.hySeg[s.seg])) st.hySeg[s.seg]=s.min;
-      const runs=h.sets.filter(s=>isHyRun(s.seg)&&s.min); st.series.push({x:h.date,total:full?tot:null,run:runs.length?runs.reduce((q,s)=>q+s.min,0)/runs.length:null}); continue; }
+      const runs=h.sets.filter(s=>isHyRun(s.seg)&&s.min); st.series.push({x:h.date,live:h.w.live,total:full?tot:null,run:runs.length?runs.reduce((q,s)=>q+s.min,0)/runs.length:null}); continue; }
     for(const s of h.sets){
       st.sets++;
       const v=setVol(s,t,h.w.bw,id); sv+=v; st.vol+=v; st.reps+=s.r||0;
@@ -622,7 +686,7 @@ function exStats(id,from){
     }
     if(sv>st.bestSessVol){st.bestSessVol=sv;st.bestSessDate=h.date;}
     if(sKm>st.maxKm){st.maxKm=sKm;st.maxKmDate=h.date;}
-    st.series.push({x:h.date,vol:sv,maxW:sMaxW,e1:sE1,maxR:sMaxR,km:sKm,pace:sKm?sMin/sKm:null,min:sMin,sec:sSec,rpe:sRpeN?sRpe/sRpeN:null});
+    st.series.push({x:h.date,live:h.w.live,vol:sv,maxW:sMaxW,e1:sE1,maxR:sMaxR,km:sKm,pace:sKm?sMin/sKm:null,min:sMin,sec:sSec,rpe:sRpeN?sRpe/sRpeN:null});
   }
   return st;
 }
@@ -657,7 +721,7 @@ const DISTS=[[5,'5 km'],[10,'10 km'],[21.0975,'Halbmarathon'],[42.195,'Marathon'
 const RACE_RUNS=['c_run_out','c_run_in'];
 function runEfforts(from='0000'){
   const out=[];
-  for(const w of S.workouts){ if(w.date<from) continue; for(const e of w.ex) if(RACE_RUNS.includes(e.ex)) for(const s of e.sets) if(s.km>=1&&s.min) out.push({date:w.date,km:s.km,min:s.min,src:exName(e.ex)}); }
+  for(const w of statWs()){ if(w.date<from) continue; for(const e of w.ex) if(RACE_RUNS.includes(e.ex)) for(const s of e.sets) if(s.km>=1&&s.min) out.push({date:w.date,km:s.km,min:s.min,src:exName(e.ex)}); }
   for(const r of S.events) if(r.date>=from&&r.km&&r.result) out.push({date:r.date,km:r.km,min:r.result,src:r.name||'Wettkampf',race:true});
   return out;
 }
@@ -1215,13 +1279,24 @@ function openExercise(id,tab){
       }
       metric=metric&&mets.some(m=>m[0]===metric)?metric:mets[0][0];
       const yfmt = metric==='pace'?(v=>paceFmt(v).replace(' /km','')):metric==='sec'?(v=>Math.round(v)+'s'):['total','run','min'].includes(metric)&&t!=='lauf'&&t!=='cardio'?(v=>minFmt(v)):null;
-      body=`${chips('exR',RANGES.map(r=>[r[0],r[2]]),rng)}<div class="grid2" style="margin:12px 0">${grid}</div>
+      const LV=liveWorkout(), le=LV&&LV.ex.find(x=>x.ex===id);
+      let cmp='';
+      if(le){ const lw=le.sets.filter(s=>s.kind!=='w'), prev=lastSession(id,LV.id), pw=prev?prev.sets.filter(s=>s.kind!=='w'):[];
+        const n=Math.max(lw.length,pw.length);
+        const rows=t==='hyrox'?`<div class="kv"><span class="mute">Gesamt</span><span style="display:flex;gap:14px"><b style="width:92px;text-align:right">${minFmt(hyTotal(lw))}</b><b style="width:92px;text-align:right;color:var(--mute)">${pw.length?minFmt(hyTotal(pw)):'–'}</b></span></div>`
+          :Array.from({length:n},(_,i)=>`<div class="kv"><span class="mute">Satz ${i+1}</span><span style="display:flex;gap:14px"><b style="width:92px;text-align:right">${lw[i]?setTxt(lw[i],t):'–'}</b><b style="width:92px;text-align:right;color:var(--mute)">${pw[i]?setTxt(pw[i],t):'–'}</b></span></div>`).join('');
+        let delta='';
+        if(['kraft','body','carry'].includes(t)&&pw.length){ const v1=lw.reduce((q,s)=>q+setVol(s,t,LV.bw,id),0), v0=pw.reduce((q,s)=>q+setVol(s,t,LV.bw,id),0);
+          if(v0) delta=`<div class="small mute" style="margin-top:6px">Volumen bisher: <b style="color:var(--text)">${fmtK(Math.round(v1))} kg</b> von ${fmtK(Math.round(v0))} kg letztes Mal (${Math.round(v1/v0*100)} %)</div>`; }
+        cmp=`<div class="livenote"><span class="livedot"></span><span>Inklusive der abgehakten Sätze aus dem laufenden Training</span></div>
+          <div class="card"><h3>Heute vs. letztes Mal</h3><div class="kv small mute" style="font-weight:800"><span></span><span style="display:flex;gap:14px"><span style="width:92px;text-align:right">Heute</span><span style="width:92px;text-align:right">${prev?dLabel(prev.date):'Letztes Mal'}</span></span></div>${rows}${pw.length?'':'<div class="tiny dim">Noch keine frühere Einheit dieser Übung.</div>'}${delta}</div>`; }
+      body=`${cmp}${chips('exR',RANGES.map(r=>[r[0],r[2]]),rng)}<div class="grid2" style="margin:12px 0">${grid}</div>
         ${t==='hyrox'&&st.hySeg.length?`<div class="card"><h3>Beste Splits</h3>${HY_SEG.map((s,i)=>st.hySeg[i]?`<div class="kv small"><span style="color:${isHyRun(i)?'var(--blue)':'inherit'}">${s}</span><b>${minFmt(st.hySeg[i])}</b></div>`:'').join('')}</div>`:''}
-        <div class="card"><h3>Verlauf</h3>${chips('exM',mets,metric)}<div style="margin-top:8px">${lineChart(st.series.map(s=>({x:s.x,y:s[metric]||null})),{yfmt})}</div></div>
+        <div class="card"><h3>Verlauf</h3>${chips('exM',mets,metric)}<div style="margin-top:8px">${lineChart(st.series.map(s=>({x:s.x,y:s[metric]||null,live:s.live})),{yfmt,unit:['pace','min','total','run'].includes(metric)?'min':metric==='sec'?'sec':null})}</div></div>
         ${st.last?`<div class="small mute">Erste Einheit ${dLabel(st.first)} · letzte ${dLabel(st.last)}</div>`:''}`;
     } else {
       const H=exHistory(id).reverse();
-      body=H.length?H.map(h=>`<div class="card"><h3>${dLabel(h.date,true)} <span class="mute" style="text-transform:none;letter-spacing:0">${esc(h.w.name)}</span></h3>${t==='hyrox'?`<div class="kv"><b>Gesamt</b><b>${minFmt(hyTotal(h.sets))}</b></div>`:''}${h.sets.map((s,i)=>`<div class="kv"><span class="mute">${t==='hyrox'?HY_SEG[s.seg]:'Satz '+(i+1)}</span><b>${setTxt(s,t)}</b></div>`).join('')}</div>`).join(''):'<div class="empty">Noch nie trainiert.</div>';
+      body=H.length?H.map(h=>`<div class="card"><h3>${dLabel(h.date,true)} <span class="mute" style="text-transform:none;letter-spacing:0">${esc(h.w.name)}${h.w.live?' · 🔴 läuft':''}</span></h3>${t==='hyrox'?`<div class="kv"><b>Gesamt</b><b>${minFmt(hyTotal(h.sets))}</b></div>`:''}${h.sets.map((s,i)=>`<div class="kv"><span class="mute">${t==='hyrox'?HY_SEG[s.seg]:'Satz '+(i+1)}</span><b>${setTxt(s,t)}</b></div>`).join('')}</div>`).join(''):'<div class="empty">Noch nie trainiert.</div>';
     }
     sb.innerHTML=seg('exT',[['info','Info'],['stats','Statistik'],['hist','Verlauf']],cur)+body;
     bindSeg(sb,'exT',v=>{cur=v;draw();}); bindSeg(sb,'exR',v=>{rng=v;draw();}); bindSeg(sb,'exM',v=>{metric=v;draw();});
@@ -1336,7 +1411,7 @@ function drawExBlock(a,e,ei){
   const note=e.note?`<div class="small mute" style="margin:-2px 0 6px">📝 ${esc(e.note)}</div>`:'';
   const last=a.editId?null:lastSession(e.ex);
   if(t==='hyrox'){
-    const tot=hyTotal(e.sets); const best=exStats(e.ex,'0000').hySeg;
+    const tot=hyTotal(e.sets); const best=exStats(e.ex,'0000',true).hySeg;
     return `<div class="wex" data-sort="${ei}">${head}${note}${last?`<div class="lastline">Letzte Simulation ${dLabel(last.date)}: <b>${minFmt(hyTotal(last.sets))}</b></div>`:''}
       ${e.sets.map((s,si)=>`<div class="hyrow"><span class="lbl ${isHyRun(s.seg)?'run':''}">${HY_SEG[s.seg]}</span><input data-hy="${ei}:${si}" value="${s.min!=null?minFmt(s.min):''}" placeholder="${best[s.seg]?minFmt(best[s.seg]):'mm:ss'}" inputmode="text" style="text-align:center;padding:8px 4px;font-weight:700"><span class="chk ${s.min!=null?'on':''}">${I.check}</span></div>`).join('')}
       <div class="row between" style="margin-top:8px"><span class="small mute">Gesamt${hyComplete(e.sets)?'':' (unvollständig – zählt erst komplett als Bestzeit)'}</span><span class="mid" style="color:var(--orange)" id="hyTot${ei}">${tot?minFmt(tot):'–'}</span></div>
@@ -1606,7 +1681,7 @@ function renderErn(app){
        ${es.length?`<div class="list">${es.map(e=>`<button class="item" data-entry="${e.id}"><div class="grow"><div style="font-weight:650">${esc(e.name)}</div><div class="small mute">${e.recipeId?'📖 '+fmt(e.portions,1).replace(',0','')+' Portion'+(e.portions==1?'':'en')+' · ':''}${e.g!=null?fmt(e.g)+' g · ':''}${S.track.p?'P '+fmt(e.n.p)+' · ':''}${S.track.c?'KH '+fmt(e.n.c)+' · ':''}${S.track.f?'F '+fmt(e.n.f):''}</div></div><b>${fmt(e.n.kcal)}</b></button>`).join('')}</div>`:''}</div>`; }).join('')}
    ${S.track.water?`<div class="card"><h3>💧 Wasser <span class="mute" style="text-transform:none;letter-spacing:0">${fmt((day.water||0)/1000,2)} / ${fmt(n.water/1000,1)} l</span></h3><div class="bar" style="height:12px;margin-bottom:10px"><i style="width:${Math.min(100,100*(day.water||0)/n.water)}%;background:linear-gradient(90deg,#60a5fa,#3b82f6)"></i></div><div class="row"><button class="btn grow" data-water="-250">−250 ml</button><button class="btn grow" data-water="250">+250 ml</button><button class="btn grow" data-water="500">+500 ml</button></div></div>`:''}
    <div class="row" style="margin-bottom:14px"><button class="btn grow" id="copyDay">📋 Ganzen Tag von gestern</button><button class="btn grow" id="eProf2">🎯 Bedarf & Ziele</button></div>
-   <div class="card"><h3>Letzte 7 Tage (kcal)</h3>${barChart(week,{goal:n.kcal,h:130})}</div>
+   <div class="card"><h3>Letzte 7 Tage (kcal)</h3>${barChart(week,{goal:n.kcal,h:130,tip:v=>fmt(v)+' kcal'})}</div>
   </div>`;
   $('#dPrev',app).onclick=()=>{ui.ernDate=addDays(d,-1);render();};
   $('#dNext',app).onclick=()=>{ if(d<addDays(today(),14)){ui.ernDate=addDays(d,1);render();} };
@@ -2036,19 +2111,20 @@ function bodySvg(m,max,side){
 }
 function buckets(key){
   const r=RANGES.find(x=>x[0]===key); let a=rangeStart(key);
-  if(key==='all'){ a=S.workouts.reduce((q,w)=>w.date<q?w.date:q,today()); }
+  if(key==='all'){ a=statWs().reduce((q,w)=>w.date<q?w.date:q,today()); }
   const out=[]; const t=today();
   if(r[1]&&r[1]<=6){ let m=monday(a); while(m<=t){ out.push({a:m,b:addDays(m,6),l:pd(m).getDate()+'.'+(pd(m).getMonth()+1)+'.'}); m=addDays(m,7); } }
   else { let m=monthStart(a); while(m<=t){ out.push({a:m,b:monthEnd(m),l:MON[pd(m).getMonth()]+(m.slice(5,7)==='01'?' '+m.slice(2,4):'')}); m=addMonths(m,1); } }
   return out;
 }
 function renderStats(app){
-  app.innerHTML=header('Statistik','Deine Auswertungen')+`<div class="page">${chips('st',[['uebersicht','📊 Übersicht'],['kalender','📅 Kalender'],['plan','✅ Plan-Treue'],['muskeln','💪 Muskeln'],['laufen','🏃 Laufen'],['bericht','📝 Berichte']],ui.stTab)}<div id="stB" style="margin-top:12px"></div></div>`;
+  const LV=liveWorkout();
+  app.innerHTML=header('Statistik','Deine Auswertungen')+`<div class="page">${LV?`<div class="livenote"><span class="livedot"></span><span>Laufendes Training „${esc(LV.name)}“ ist schon eingerechnet (${LV.ex.reduce((q,e)=>q+e.sets.filter(s=>s.kind!=='w').length,0)} abgehakte Sätze)</span></div>`:''}${chips('st',[['uebersicht','📊 Übersicht'],['kalender','📅 Kalender'],['plan','✅ Plan-Treue'],['muskeln','💪 Muskeln'],['laufen','🏃 Laufen'],['bericht','📝 Berichte']],ui.stTab)}<div id="stB" style="margin-top:12px"></div></div>`;
   bindSeg(app,'st',v=>{ui.stTab=v;render();});
   const b=$('#stB',app);
   ({uebersicht:stOverview,kalender:stCalendar,plan:stPlan,muskeln:stMuscles,laufen:stRun,bericht:stReport})[ui.stTab](b);
 }
-function firstDate(){ return S.workouts.reduce((q,w)=>w.date<q?w.date:q,today()); }
+function firstDate(){ return statWs().reduce((q,w)=>w.date<q?w.date:q,today()); }
 
 function stOverview(b){
   const a=rangeStart(ui.stRange), t=today(); const ws=wsIn(a,t);
@@ -2066,7 +2142,7 @@ function stOverview(b){
   b.innerHTML=`${chips('rng',RANGES.map(r=>[r[0],r[2]]),ui.stRange)}
    <div class="grid3" style="margin:12px 0"><div class="stat" style="background:var(--card)"><div class="v">${ws.length}</div><div class="l">Einheiten</div></div><div class="stat" style="background:var(--card)"><div class="v">${durShort(min)}</div><div class="l">Trainingszeit</div></div><div class="stat" style="background:var(--card)"><div class="v">${durShort(min/weeks)}</div><div class="l">Ø pro Woche</div></div>
    <div class="stat" style="background:var(--card)"><div class="v">${fmtK(Math.round(vol))}</div><div class="l">Volumen kg</div></div><div class="stat" style="background:var(--card)"><div class="v">${fmt(sets)}</div><div class="l">Sätze</div></div><div class="stat" style="background:var(--card)"><div class="v">${fmt(km,1)}</div><div class="l">km gelaufen</div></div></div>
-   <div class="card"><h3>${M[0]} pro ${weekly?'Woche':'Monat'}</h3>${chips('vm',[['dur','⏱ Dauer'],['cnt','# Einheiten'],['vol','🏋️ Volumen'],['km','🏃 Kilometer']],ui.volMetric)}<div style="margin-top:8px">${barChart(data,{color:M[2],yfmt:M[3],tip:M[3]||(v=>fmt(v))})}</div></div>
+   <div class="card"><h3>${M[0]} pro ${weekly?'Woche':'Monat'}</h3>${chips('vm',[['dur','⏱ Dauer'],['cnt','# Einheiten'],['vol','🏋️ Volumen'],['km','🏃 Kilometer']],ui.volMetric)}<div style="margin-top:8px">${barChart(data,{color:M[2],yfmt:M[3],tip:M[3]||(v=>fmt(v)),unit:ui.volMetric==='dur'?'min':null})}</div></div>
    ${S.routines.length?`<div class="card" style="padding-top:5px">${rout}${weekly?'':'<div class="tiny dim">Monatsansicht: Ø Tage pro Woche</div>'}</div>`:''}
    <div class="card"><h3>Meisttrainierte Übungen (Sätze)</h3>${top.length?`<div class="list">${top.map(([id,n])=>`<button class="item" data-ex="${esc(id)}"><div class="grow">${esc(exName(id))}</div><b>${n}</b></button>`).join('')}</div>`:'<div class="empty">Keine Daten</div>'}</div>
    <div class="card"><h3>🏆 Rekorde im Zeitraum</h3>${prs.length?prs.map(x=>`<div class="kv"><span class="pr">${esc(x.p)}</span><span class="small mute">${dLabel(x.d)}</span></div>`).join(''):'<div class="empty">Noch keine Rekorde im Zeitraum</div>'}</div>`;
@@ -2080,7 +2156,7 @@ function stCalendar(b){
   const ws=wsIn(first,last);
   let cells='';
   for(let d=start; d<=last||wdIdx(d)!==0; d=addDays(d,1)){
-    const dw=S.workouts.filter(w=>w.date===d); const h=S.habits[d]||{};
+    const dw=statWs().filter(w=>w.date===d); const h=S.habits[d]||{};
     const cols=dw.map(w=>{ const p=S.plans.find(x=>x.id===w.planId); return p?p.color:'#94a3b8'; });
     const planned=plansOnDay(d).length&&d>=first;
     cells+=`<button class="d ${d.slice(0,7)!==m.slice(0,7)?'out':''} ${d===t?'today':''} ${dw.length?'tr':''}" data-day="${d}"><span>${pd(d).getDate()}</span><span class="ds">${cols.map(c=>`<i style="background:${c}"></i>`).join('')}</span><span class="hb">${S.routines.map(r=>`<b style="${h[r.id]?'background:'+r.color:''}"></b>`).join('')}</span></button>`;
@@ -2097,7 +2173,7 @@ function stCalendar(b){
 }
 function daySheet(d){
   const sb=openSheet(dLabel(d,true),'');
-  const draw=()=>{ const h=S.habits[d]||{}; const dw=S.workouts.filter(w=>w.date===d); const pl=plansOnDay(d); const tot=dayTotals(d);
+  const draw=()=>{ const h=S.habits[d]||{}; const dw=statWs().filter(w=>w.date===d); const pl=plansOnDay(d); const tot=dayTotals(d);
     sb.innerHTML=`<div class="row wrap" style="align-items:stretch;margin-bottom:12px">${S.routines.map(r=>`<button class="habit ${h[r.id]?'on':''}" style="--hc:${r.color}" data-h="${r.id}"><div class="t">${esc(r.emoji||'')} ${h[r.id]?'✓ ':''}${esc(r.name)}</div></button>`).join('')}</div>
      ${pl.length?`<div class="small mute" style="margin-bottom:8px">Geplant: ${pl.map(p=>esc(p.name)).join(', ')}</div>`:''}
      ${dw.length?dw.map(w=>`<button class="card" style="display:block;width:100%;text-align:left" data-w="${w.id}"><b>${esc(w.name)}</b><div class="small mute">${durFmt(w.dur)} · ${wSets(w)} Sätze${wRun(w).km?' · '+fmt(wRun(w).km,1)+' km':''}</div></button>`).join(''):'<div class="empty" style="padding:10px">Kein Workout</div>'}
@@ -2130,7 +2206,7 @@ function stPlan(b){
      <hr class="sep">${ad.rows.map(r=>`<div style="margin:10px 0"><div class="row between"><span class="row"><i class="dot" style="background:${r.p.color}"></i><b>${esc(r.p.name)}</b></span><span class="small"><b>${r.D}</b> <span class="mute">/ ${r.P} geplant</span> ${r.P&&r.D>=r.P?'✅':''}</span></div><div class="bar" style="margin-top:5px"><i style="width:${r.P?Math.min(100,100*r.D/r.P):r.D?100:0}%;background:${r.p.color}"></i></div></div>`).join('')}
      ${ad.free?`<div class="small mute">+ ${ad.free} freie Workouts ohne Plan</div>`:''}</div>
    ${S.routines.length?`<div class="card"><h3>Routinen im Zeitraum</h3><div class="grid2">${S.routines.map(r=>{ const n=routineCount(P.a,P.b<t?P.b:t,r.id), g=Math.round(r.goal*goalF); return `<div class="stat"><div class="v" style="color:${n>=g?r.color:'inherit'}">${n}<span class="small mute"> / ${g}</span></div><div class="l">${esc(r.emoji||'')} ${esc(r.name)}</div></div>`; }).join('')}</div></div>`:''}
-   <div class="card"><h3>Plan-Treue Verlauf (%)</h3>${barChart(hist,{goal:100,h:130,yfmt:v=>Math.round(v)+'%',tip:v=>v+' %'})}</div>
+   <div class="card"><h3>Plan-Treue Verlauf (%)</h3>${barChart(hist,{goal:100,h:130,yfmt:v=>Math.round(v)+'%',tip:v=>fmt(v)+' %'})}</div>
    <div class="card"><h3>Wann trainierst du welchen Plan? <span class="mute" style="text-transform:none;letter-spacing:0">3 Monate</span></h3>
      <div class="hm-grid" style="grid-template-columns:minmax(70px,1.6fr) repeat(7,1fr)"><div></div>${WD.map(d=>`<div class="h">${d}</div>`).join('')}
      ${hm.map(x=>`<div class="small" style="align-self:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.p.name)}</div>${x.c.map((v,i)=>`<div class="c" style="background:${v?x.p.color:'var(--card2)'};opacity:${v?0.4+0.6*v/hmMax:1};color:${v?'#fff':'var(--dim)'};${x.p.days.includes(i)?'outline:1.5px dashed var(--mute);':''}">${v||''}</div>`).join('')}`).join('')}</div>
@@ -2174,8 +2250,8 @@ function stRun(b){
    ${chips('rr',RANGES.map(r=>[r[0],r[2]]),ui.runRange)}
    <div class="grid3" style="margin:12px 0"><div class="stat" style="background:var(--card)"><div class="v">${fmt(km,1)}</div><div class="l">km gesamt</div></div><div class="stat" style="background:var(--card)"><div class="v">${runs.length}</div><div class="l">Läufe</div></div><div class="stat" style="background:var(--card)"><div class="v">${durShort(min)}</div><div class="l">Laufzeit</div></div>
    <div class="stat" style="background:var(--card)"><div class="v">${paceFmt(km?min/km:0).replace(' /km','')}</div><div class="l">Ø Pace /km</div></div><div class="stat" style="background:var(--card)"><div class="v">${fmt(hm)}</div><div class="l">Höhenmeter</div></div><div class="stat" style="background:var(--card)"><div class="v">${avgHr?fmt(avgHr):'–'}</div><div class="l">Ø Puls</div></div></div>
-   <div class="card"><h3>Kilometer pro ${weekly?'Woche':'Monat'}</h3>${barChart(data,{color:'var(--orange)'})}${longest?`<div class="small mute">Längster Lauf: <b style="color:var(--text)">${fmt(longest.km,2)} km</b> am ${dLabel(longest.date)}</div>`:''}</div>
-   <div class="card"><h3>Pace-Verlauf (min/km)</h3>${lineChart(runs.filter(r=>!r.iv&&r.km>=1&&r.min).map(r=>({x:r.date,y:r.min/r.km})),{yfmt:v=>paceFmt(v).replace(' /km',''),color:'var(--teal)'})}<div class="tiny dim">Niedriger = schneller</div></div>
+   <div class="card"><h3>Kilometer pro ${weekly?'Woche':'Monat'}</h3>${barChart(data,{color:'var(--orange)',tip:v=>fmt(v,1)+' km'})}${longest?`<div class="small mute">Längster Lauf: <b style="color:var(--text)">${fmt(longest.km,2)} km</b> am ${dLabel(longest.date)}</div>`:''}</div>
+   <div class="card"><h3>Pace-Verlauf (min/km)</h3>${lineChart(runs.filter(r=>!r.iv&&r.km>=1&&r.min).map(r=>({x:r.date,y:r.min/r.km})),{yfmt:v=>paceFmt(v).replace(' /km',''),unit:'min',color:'var(--teal)'})}<div class="tiny dim">Niedriger = schneller</div></div>
    <div class="card"><h3>Nach Laufart</h3>${byType.size?[...byType.entries()].map(([id,o])=>`<button class="kv" style="width:100%" data-ex="${esc(id)}"><span>${esc(exName(id))} <span class="dim small">${o.n}×</span></span><b>${fmt(o.km,1)} km · ${paceFmt(o.km?o.min/o.km:0)}${o.hm?' · '+fmt(o.hm)+' Hm':''}</b></button>`).join(''):'<div class="empty">Noch keine Läufe im Zeitraum</div>'}</div>
    ${hy.sessions?`<div class="card"><h3>🔥 Hyrox <button class="lnk" data-ex="c_hy_sim">Details ›</button></h3><div class="grid2"><div class="stat"><div class="v">${minFmt(hy.hyBest)}</div><div class="l">Beste Gesamtzeit · ${dLabel(hy.hyBestDate)}</div></div><div class="stat"><div class="v">${hy.sessions}</div><div class="l">Simulationen</div></div></div>${lineChart(hy.series.map(s=>({x:s.x,y:s.total||null})),{yfmt:v=>minFmt(v),color:'var(--warn)',h:120})}</div>`:''}
    <div class="card"><h3>Letzte Läufe</h3>${runs.slice(-10).reverse().map(r=>`<button class="kv" style="width:100%" data-w="${r.wid}"><span>${dLabel(r.date)} · ${esc(exName(r.ex))}</span><b>${setTxt(r,'lauf')}</b></button>`).join('')||'<div class="empty">–</div>'}</div>`;
